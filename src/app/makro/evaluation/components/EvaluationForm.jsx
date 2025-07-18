@@ -2,6 +2,33 @@
 import React, { useState, useRef } from "react";
 import html2canvas from "html2canvas";
 
+// ======= ฟังก์ชันอัปโหลดไฟล์ไป S3 Presigned URL =======
+async function uploadToS3(file, evaID, label) {
+  const ext = file.name.split('.').pop();
+  const filename = `${evaID}-${label}.${ext}`;
+  console.log("File to upload:", filename, file.type);
+
+  const urlRes = await fetch(`/api/evaluation/upload-url-aws?filename=${filename}&contentType=${encodeURIComponent(file.type)}`);
+  const { url, fileUrl } = await urlRes.json();
+
+  console.log("S3 presigned url", url);
+
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+
+  // log response status
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Upload error", res.status, errText);
+    throw new Error(`Upload failed: ${res.status} - ${errText}`);
+  }
+
+  return fileUrl;
+}
+
 const makroRed = "#ED1B24";
 const makroBlue = "#00205B";
 const makroGray = "#F6F6F6";
@@ -20,11 +47,9 @@ const HEADERS = [
 ];
 
 export default function MakroEvaluationForm() {
-  // เพิ่ม State ส่วนหัว
   const [employeeName, setEmployeeName] = useState("");
   const [branch, setBranch] = useState("");
   const [workTime, setWorkTime] = useState("");
-
   const [scores, setScores] = useState(Array(10).fill(""));
   const [remarks, setRemarks] = useState(Array(10).fill(""));
   const [images, setImages] = useState([undefined, undefined]);
@@ -32,12 +57,15 @@ export default function MakroEvaluationForm() {
   const [problem, setProblem] = useState("");
   const [storeComment, setStoreComment] = useState("");
   const [showSummary, setShowSummary] = useState(false);
+  const [loading, setLoading] = useState(false);
   const summaryRef = useRef(null);
+  const [employeeCode, setEmployeeCode] = useState("TEST1234");
 
   const total = scores.reduce((acc, cur) => acc + (parseInt(cur) || 0), 0);
   const avg = (total / HEADERS.length).toFixed(2);
 
   function getLevelAndColor(avg) {
+    avg = parseFloat(avg);
     if (avg >= 3.5) return { text: "ดีเยี่ยม", color: makroRed };
     if (avg >= 2.5) return { text: "ดี", color: makroBlue };
     if (avg >= 1.5) return { text: "ปานกลาง", color: "#FFC107" };
@@ -55,7 +83,7 @@ export default function MakroEvaluationForm() {
     setImages(prev =>
       prev.map((v, i) =>
         i === imgIdx && file
-          ? { file, url: URL.createObjectURL(file) }
+          ? { file, url: URL.createObjectURL(file), label: imgIdx === 0 ? "full" : "hand" }
           : i === imgIdx && !file
           ? undefined
           : v
@@ -70,7 +98,6 @@ export default function MakroEvaluationForm() {
     { value: "1", label: "1 = ไม่พอใจ", color: "text-[#00205B]" }
   ];
 
-  // Download summary png
   const handleDownload = async () => {
     if (!summaryRef.current) return;
     const canvas = await html2canvas(summaryRef.current, { backgroundColor: null });
@@ -81,11 +108,67 @@ export default function MakroEvaluationForm() {
     a.click();
   };
 
-  const handleSave = () => {
-    // Mock save
-    alert("บันทึกผลเรียบร้อย! (Demo - คุณสามารถต่อ API ได้)");
-    setShowSummary(false);
-  };
+  // ส่งข้อมูลไป API
+const handleSave = async () => {
+  setLoading(true);
+  try {
+    // 1. ขอ evaID ก่อน
+    const resID = await fetch("/api/evaluation/gen-id");
+    const { evaID } = await resID.json();
+
+    // 2. อัปโหลดรูป ถ้ามี (วนแต่ละ label)
+    let imageUrls = [undefined, undefined];
+    for (let idx = 0; idx < images.length; idx++) {
+      const img = images[idx];
+      if (img?.file) {
+        const label = idx === 0 ? "full" : "hand";
+        const url = await uploadToS3(img.file, evaID, label);
+        imageUrls[idx] = { url, label };
+      }
+    }
+    const imagesPayload = imageUrls.filter(Boolean);
+
+    // 3. payload ข้อมูลอื่นๆ
+    const payload = {
+      evaID,
+      employeeName,
+      employeeCode,
+      branch,
+      workTime,
+      scores: scores.map((s) => Number(s) || 0),
+      remarks,
+      images: imagesPayload,
+      summary,
+      problem,
+      storeComment,
+      total,
+      avg: Number(avg),
+      level: level.text,
+    };
+
+    const res = await fetch("/api/evaluation/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      alert("บันทึกผลเรียบร้อย!");
+      setShowSummary(false);
+      setEmployeeName(""); setBranch(""); setWorkTime("");
+      setScores(Array(10).fill(""));
+      setRemarks(Array(10).fill(""));
+      setImages([undefined, undefined]);
+      setSummary(""); setProblem(""); setStoreComment("");
+      setEmployeeCode("TEST1234");
+    } else {
+      alert("บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง");
+    }
+  } catch (err) {
+    alert("error: " + err.message);
+  }
+  setLoading(false);
+};
 
   return (
     <>
@@ -295,7 +378,7 @@ export default function MakroEvaluationForm() {
         </div>
       </div>
 
-      {/* Modal Summary (Makro Tone) */}
+      {/* Modal Summary */}
       {showSummary && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
           <div className="bg-white rounded-2xl shadow-2xl p-0 max-w-xl w-[99vw] overflow-hidden border border-[#ED1B24]/40">
@@ -366,13 +449,15 @@ export default function MakroEvaluationForm() {
               <button
                 onClick={() => setShowSummary(false)}
                 className="px-6 py-2 rounded-xl font-bold bg-white border border-[#CED4DA] hover:bg-[#eee] text-[#00205B]"
+                disabled={loading}
               >ปิด</button>
               <div className="flex gap-2">
                 <button
                   onClick={handleSave}
                   className="px-6 py-2 rounded-xl font-bold bg-[#00205B] hover:bg-[#12316c] text-white shadow"
+                  disabled={loading}
                 >
-                  บันทึก
+                  {loading ? "กำลังบันทึก..." : "บันทึก"}
                 </button>
                 <button
                   onClick={handleDownload}
