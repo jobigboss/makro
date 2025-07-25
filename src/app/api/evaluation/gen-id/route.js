@@ -1,5 +1,5 @@
 // api/evaluation/gen-id
-import { connectMongoDB } from "../../../../../lib/mongosb";
+import { connectMongoDB } from "../../../../../lib/mongodb";
 import Evaluation from "../../../../../models/evaluation";
 import { NextResponse } from "next/server";
 

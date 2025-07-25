@@ -20,6 +20,7 @@ const MakroEvaluationSchema = new mongoose.Schema({
   total: { type: Number, required: true },
   avg: { type: Number, required: true },
   level: { type: String, enum: ["ดีเยี่ยม", "ดี", "ปานกลาง", "ต้องปรับปรุง"], required: true },
+  adminID:{type: String}
 }, { timestamps: true });
 
 const Evaluation = mongoose.models.Evaluation || mongoose.model("Evaluation", MakroEvaluationSchema, "MK_evaluation");
